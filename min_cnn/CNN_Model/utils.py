@@ -29,10 +29,11 @@ class SteeringDataset(Dataset):
         image = Image.open(image_path).convert('RGB')
         angle = float(row['steering'])
 
-        # 🔥 학습 단계에서만 사용하는 랜덤 좌우 반전 + 각도 보정
+        # 학습 단계에서만 사용하는 랜덤 좌우 반전 + 각도 보정
+        # 좌우 반전된 이미지의 조향각은 부호가 반전됩니다. (예: left -> right)
         if self.use_random_flip and np.random.rand() < 0.5:
             image = ImageOps.mirror(image)     # 좌우 반전
-            angle = 180.0 - angle              # 조향각도 반전
+            angle = -angle                     # 조향각 부호 반전
 
         if self.transform:
             image = self.transform(image)

@@ -13,7 +13,7 @@ from utils import SteeringDataset  # 사용자 정의 데이터셋 클래스
 from config import *  # 설정 상수 불러오기
 
 # 학습 함수 정의
-def train(model, loader, optimizer, criterion, device):
+def train(model, loader, optimizer, criterion, device, clip_grad=None):
     model.train()  # 모델을 학습 모드로 전환
     running_loss = 0.0  # 에폭 동안 손실 누적 변수
     for imgs, angles in tqdm(loader, desc="Training", leave=False):  # 배치 단위 학습 루프
@@ -23,6 +23,9 @@ def train(model, loader, optimizer, criterion, device):
         loss = criterion(outputs, angles)
         #loss = criterion(model(imgs).squeeze(), angles)  # 예측과 실제 각도의 손실 계산
         loss.backward()  # 손실 역전파
+        # gradient clipping to avoid exploding gradients
+        if clip_grad is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
         optimizer.step()  # 가중치 업데이트
         running_loss += loss.item() * imgs.size(0)  # 배치 손실 누적
     return running_loss / len(loader.dataset)  # 평균 손실 반환
@@ -94,8 +97,14 @@ if __name__ == '__main__':
     
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # 학습 디바이스 설정
     model = SteeringModel().to(device)  # 모델 초기화 및 디바이스 할당
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)  # Adam 옵티마이저
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)  # Adam 옵티마이저 (weight decay 추가)
     criterion = nn.MSELoss()  # 손실 함수: 평균제곱오차
+
+    # LR scheduler 설정 (validation loss 기준 ReduceLROnPlateau)
+    scheduler = None
+    if REDUCE_LR_ON_PLATEAU:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=REDUCE_LR_FACTOR, patience=REDUCE_LR_PATIENCE, min_lr=MIN_LR, verbose=True)
 
     save_dir = get_unique_train_folder()  # 고유 학습 결과 폴더 생성
     log_path = os.path.join(save_dir, 'log.csv')  # 로그 파일 경로 설정
@@ -108,11 +117,17 @@ if __name__ == '__main__':
     # 학습 루프 시작
     for epoch in range(1, EPOCHS + 1):
         print(f"Epoch {epoch}/{EPOCHS}")  # 현재 에폭 출력
-        train_loss = train(model, train_loader, optimizer, criterion, device)  # 학습 손실 계산
+        # train loop (clip grad을 전달하여 폭주 차단)
+        train_loss = train(model, train_loader, optimizer, criterion, device, clip_grad=CLIP_GRAD_NORM)
         valid_loss, preds, labels = evaluate(model, valid_loader, criterion, device)  # 검증 손실 계산
-        print(f"Train Loss: {train_loss:.4f} | valid Loss: {valid_loss:.4f}")  # 결과 출력
+        # scheduler: ReduceLROnPlateau 사용 시 validation loss로 스텝
+        if scheduler is not None:
+            scheduler.step(valid_loss)
         with open(log_path, 'a') as f:  # 로그 기록 추가
             f.write(f"{epoch},{train_loss:.6f},{valid_loss:.6f}\n")
+        # 현재 learning rate 출력
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Train Loss: {train_loss:.4f} | valid Loss: {valid_loss:.4f} | lr: {current_lr:.2e}")
 
         # 현재 체크포인트 저장 후 이전 체크포인트 제거
         ckpt_path = os.path.join(save_dir, f"checkpoint_epoch{epoch}.pth")
