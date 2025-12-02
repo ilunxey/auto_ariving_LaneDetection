@@ -1,0 +1,10 @@
+drive_data.mp4
+*.mp4
+
+# datasets, generated images
+min_cnn/CNN_Model/test_dataset_1000/
+min_cnn/CNN_Model/train/
+dataset/
+__pycache__/
+*.pth
+*.png
